@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from opennodehost.controller_runtime import connect_local_stdio, response_result
+from opennodehost.controller_runtime import connect_local_stdio, connect_ssh_stdio, response_result
 
 
 VERSION = "0.1.0"
@@ -21,6 +21,9 @@ def main() -> int:
     sub.add_parser("version")
     sub.add_parser("doctor")
     sub.add_parser("selftest")
+
+    ssh_selftest = sub.add_parser("ssh-selftest")
+    ssh_selftest.add_argument("target")
 
     args = parser.parse_args()
 
@@ -56,6 +59,16 @@ def main() -> int:
                 "status": status_msgs,
                 "read": read_msgs,
             }, ensure_ascii=False))
+            return 0
+        finally:
+            conn.process.terminate()
+            conn.process.wait(timeout=5)
+
+    if args.command == "ssh-selftest":
+        conn = connect_ssh_stdio(args.target)
+        try:
+            ping_msgs = conn.request({"id": "1", "method": "ping", "params": {}})
+            print(json.dumps({"ok": True, "ping": ping_msgs}, ensure_ascii=False))
             return 0
         finally:
             conn.process.terminate()

@@ -8,3 +8,5 @@
 - add local selftest path for controller <-> node-host handshake
 - add initial cross-platform CI workflow draft
 - add minimal local session.open / exec.start / exec.status / exec.read flow
+- add SSH stdio controller connection skeleton
+- extract node runtime into a dedicated module

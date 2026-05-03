@@ -22,7 +22,10 @@ class NodeConnection:
         while True:
             line = self.process.stdout.readline()
             if not line:
-                raise RuntimeError("node host closed stdout unexpectedly")
+                stderr = ""
+                if self.process.stderr is not None:
+                    stderr = self.process.stderr.read()
+                raise RuntimeError(f"node host closed stdout unexpectedly: {stderr}")
             msg = json.loads(line)
             messages.append(msg)
             if msg.get("id") == req.get("id"):
@@ -31,6 +34,18 @@ class NodeConnection:
 
 def connect_local_stdio(project_root: Path) -> NodeConnection:
     cmd = [sys.executable, str(project_root / "src" / "opennodehost" / "node_host_cli.py"), "--stdio"]
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return NodeConnection(proc)
+
+
+def connect_ssh_stdio(target: str, remote_command: str = "opennodehost-node --stdio") -> NodeConnection:
+    cmd = ["ssh", "-T", target, remote_command]
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,

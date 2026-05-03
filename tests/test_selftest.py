@@ -28,3 +28,14 @@ def test_controller_selftest_returns_ok():
     read_result = next(msg["result"] for msg in data["read"] if msg.get("id") == "6" and msg.get("ok") is True)
     assert "hello-opennodehost" in read_result["content"]
     assert read_result["eof"] is True
+
+
+def test_node_host_version_entrypoint():
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "src" / "opennodehost" / "node_host_cli.py"), "--version"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    data = json.loads(proc.stdout)
+    assert data["role"] == "node-host"

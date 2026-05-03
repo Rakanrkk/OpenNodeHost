@@ -49,13 +49,18 @@ One JSON object per line.
 }
 ```
 
-## Initial methods
+## Implemented methods
 
 - `ping`
 - `node.describe`
-- `session.open` (planned)
-- `session.close` (planned)
-- `exec.start` (planned)
-- `exec.status` (planned)
-- `exec.read` (planned)
-- `exec.interrupt` (planned)
+- `session.open`
+- `exec.start`
+- `exec.status`
+- `exec.read`
+
+## Planned methods
+
+- `session.close`
+- `session.list`
+- `exec.interrupt`
+- `exec.list`
