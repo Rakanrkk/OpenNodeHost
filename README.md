@@ -91,14 +91,28 @@ Expected result:
 - exec lifecycle present
 - stdout/stderr readback present
 
+### Optional editable install
+
+If you want the `opennodehost` and `opennodehost-node` commands directly:
+
+```bash
+cd ~/WorkSpace/OpenNodeHost
+. .venv/bin/activate
+pip install -e .
+```
+
 ## CLI Usage
 
 ### Open a local session
 
 ```bash
-cd ~/WorkSpace/OpenNodeHost
-. .venv/bin/activate
 PYTHONPATH=src python src/opennodehost/controller_cli.py --json session open --shell bash
+```
+
+Or, after editable install:
+
+```bash
+opennodehost --json session open --shell bash
 ```
 
 ### List local sessions

@@ -62,6 +62,30 @@ def test_controller_cli_real_commands_local():
     assert opened["result"]["session_id"].startswith("sess-")
 
 
+def test_controller_cli_human_readable_exec_read_output(tmp_path: Path):
+    runtime = NodeHostRuntime(node_id="node-1", base_dir=tmp_path)
+    session = runtime.open_session(shell="bash", cwd=str(tmp_path))
+    exec_record = runtime.start_exec(session["session_id"], "printf 'hello-opennodehost'")
+    for _ in range(100):
+        status = runtime.exec_status(exec_record["exec_id"])
+        if status["status"] != "running":
+            break
+        time.sleep(0.01)
+    result = {
+        "ok": True,
+        "result": runtime.exec_read(exec_record["exec_id"], stream="stdout", offset=0, limit=32),
+    }
+    from opennodehost.controller_cli import _print_output
+    buf = io.StringIO()
+    stdout = sys.stdout
+    try:
+        sys.stdout = buf
+        _print_output(result, as_json=False)
+    finally:
+        sys.stdout = stdout
+    assert "hello-opennodehost" in buf.getvalue()
+
+
 def test_node_host_version_entrypoint():
     proc = subprocess.run(
         [sys.executable, str(ROOT / "src" / "opennodehost" / "node_host_cli.py"), "--version"],
