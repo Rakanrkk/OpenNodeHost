@@ -1,0 +1,7 @@
+{
+  "name": "opennodehost",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remote execution runtime for AI agents",
+  "license": "MIT"
+}

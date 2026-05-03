@@ -1,0 +1,14 @@
+# Ignore OS/editor noise
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs/state
+*.log
+state/

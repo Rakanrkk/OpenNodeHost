@@ -1,0 +1,10 @@
+# Remote target examples
+
+# Example idea:
+# targets:
+#   dev-linux:
+#     transport: ssh
+#     host: 10.0.0.10
+#     user: ubuntu
+#     shell: bash
+#     identity_file: ~/.ssh/id_ed25519
