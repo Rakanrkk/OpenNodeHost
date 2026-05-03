@@ -33,6 +33,128 @@ OpenNodeHost aims to provide a small, durable execution layer with these propert
 - compatibility with Linux, Windows, and WSL2
 - adapters for CLI, MCP, and API use
 
+## Current Status
+
+Current milestone: **local MVP working, SSH path scaffolded**.
+
+What works now:
+- local controller <-> node-host stdio JSONL protocol
+- `session.open`, `session.list`, `session.close`
+- `exec.start`, `exec.status`, `exec.read`, `exec.list`, `exec.interrupt`
+- asynchronous exec lifecycle with background process tracking
+- stdout/stderr buffer files with paged reads
+- controller CLI subcommands for session/exec operations
+- local selftest and pytest coverage
+
+What is still early:
+- real SSH integration is scaffolded but not yet fully validated against a remote Linux host
+- no PTY mode yet
+- no Windows/WSL2 validation yet
+- no MCP adapter yet
+- no auth/permission model yet
+
+## Quick Start
+
+### Requirements
+- Python 3.11+
+- POSIX shell for local bash-based tests
+- SSH client available if using remote targets
+
+### Install for development
+
+```bash
+cd ~/WorkSpace/OpenNodeHost
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -U pip pytest
+```
+
+### Run tests
+
+```bash
+cd ~/WorkSpace/OpenNodeHost
+. .venv/bin/activate
+PYTHONPATH=src pytest -q
+```
+
+### Run the built-in selftest
+
+```bash
+cd ~/WorkSpace/OpenNodeHost
+. .venv/bin/activate
+PYTHONPATH=src python src/opennodehost/controller_cli.py selftest
+```
+
+Expected result:
+- JSON output with `ok: true`
+- session lifecycle present
+- exec lifecycle present
+- stdout/stderr readback present
+
+## CLI Usage
+
+### Open a local session
+
+```bash
+cd ~/WorkSpace/OpenNodeHost
+. .venv/bin/activate
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json session open --shell bash
+```
+
+### List local sessions
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json session list
+```
+
+### Start an exec in a session
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json exec start <session_id> "printf 'hello from exec'"
+```
+
+### Check exec status
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json exec status <exec_id>
+```
+
+### Read stdout
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py exec read <exec_id> --stream stdout --offset 0 --limit 4096
+```
+
+### Interrupt an exec
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json exec interrupt <exec_id>
+```
+
+### Close a session
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json session close <session_id>
+```
+
+## SSH Usage
+
+Remote execution is currently based on:
+
+```bash
+ssh -T <target> opennodehost-node --stdio
+```
+
+Controller-side SSH commands accept `--target user@host` and optional `--remote-command`.
+
+Example:
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json --remote-command "python -m opennodehost.node_host_cli --stdio" session open --target user@host
+```
+
+See `docs/transport-ssh.md` for more details and caveats.
+
 ## Non-Goals
 
 OpenNodeHost is not intended to be:
@@ -77,7 +199,3 @@ This project exists because there does not appear to be a widely adopted open-so
 - simple SSH wrappers
 - traditional ops automation frameworks
 - full remote device/node control planes such as OpenClaw nodes
-
-## Status
-
-Project bootstrapping.

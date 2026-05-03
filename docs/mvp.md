@@ -10,23 +10,27 @@ The MVP is successful if it can:
 
 1. connect to a Linux node over SSH
 2. start a remote node-host process over stdio
-3. open a persistent session
+3. open a session
 4. execute commands with exec IDs
 5. retrieve output incrementally
 6. report exit status cleanly
-7. survive large outputs better than raw SSH command wrappers
+7. interrupt running work when needed
+8. survive large outputs better than raw SSH command wrappers
 
 ## MVP Components
 
 ### Local controller CLI
-Commands:
-- opennodehost nodes list
-- opennodehost connect <target>
-- opennodehost session open <target>
-- opennodehost exec start <session_id> -- <command>
-- opennodehost exec status <exec_id>
-- opennodehost exec read <exec_id> [--offset N] [--limit N]
-- opennodehost session close <session_id>
+Current implemented command families:
+- `opennodehost session open [--target ...]`
+- `opennodehost session list [--target ...]`
+- `opennodehost session close <session_id> [--target ...]`
+- `opennodehost exec start <session_id> <command> [--target ...]`
+- `opennodehost exec status <exec_id> [--target ...]`
+- `opennodehost exec read <exec_id> [--stream ...] [--offset N] [--limit N] [--target ...]`
+- `opennodehost exec list [--session-id ...] [--target ...]`
+- `opennodehost exec interrupt <exec_id> [--target ...]`
+- `opennodehost selftest`
+- `opennodehost ssh-selftest <target>`
 
 ### Remote Linux node host
 Responsibilities:
@@ -54,6 +58,7 @@ Responsibilities:
 - stderr_size
 - preview
 - more_available
+- pid
 
 ### exec.status result
 - exec_id
@@ -62,6 +67,7 @@ Responsibilities:
 - stdout_size
 - stderr_size
 - more_available
+- pid
 
 ### exec.read result
 - exec_id
@@ -77,10 +83,21 @@ Currently implemented locally:
 - `ping`
 - `node.describe`
 - `session.open`
+- `session.list`
+- `session.close`
 - `exec.start`
 - `exec.status`
 - `exec.read`
+- `exec.list`
+- `exec.interrupt`
+- asynchronous exec lifecycle via background process tracking
 - controller selftest covering the full local stdio path
+- pytest coverage for runtime, transport mock, and protocol helper behavior
+
+Still pending for a fully validated SSH MVP:
+- real remote Linux host end-to-end validation
+- remote install/bootstrap story simplification
+- stronger auth/permissions model
 
 ## Explicit Non-Goals For MVP
 
