@@ -39,3 +39,10 @@ def connect_local_stdio(project_root: Path) -> NodeConnection:
         text=True,
     )
     return NodeConnection(proc)
+
+
+def response_result(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    for msg in reversed(messages):
+        if "id" in msg and msg.get("ok") is True:
+            return msg["result"]
+    raise RuntimeError("no successful response found")

@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from opennodehost.controller_runtime import connect_local_stdio
+from opennodehost.controller_runtime import connect_local_stdio, response_result
 
 
 VERSION = "0.1.0"
@@ -37,10 +37,24 @@ def main() -> int:
         try:
             ping_msgs = conn.request({"id": "1", "method": "ping", "params": {}})
             describe_msgs = conn.request({"id": "2", "method": "node.describe", "params": {}})
+            session_msgs = conn.request({"id": "3", "method": "session.open", "params": {"shell": "bash"}})
+            session = response_result(session_msgs)
+            exec_msgs = conn.request({
+                "id": "4",
+                "method": "exec.start",
+                "params": {"session_id": session["session_id"], "command": "printf 'hello-opennodehost'"},
+            })
+            exec_result = response_result(exec_msgs)
+            status_msgs = conn.request({"id": "5", "method": "exec.status", "params": {"exec_id": exec_result["exec_id"]}})
+            read_msgs = conn.request({"id": "6", "method": "exec.read", "params": {"exec_id": exec_result["exec_id"], "stream": "stdout", "offset": 0, "limit": 4096}})
             print(json.dumps({
                 "ok": True,
                 "ping": ping_msgs,
                 "describe": describe_msgs,
+                "session": session_msgs,
+                "exec": exec_msgs,
+                "status": status_msgs,
+                "read": read_msgs,
             }, ensure_ascii=False))
             return 0
         finally:

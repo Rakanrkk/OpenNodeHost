@@ -21,6 +21,7 @@ class Session:
     node_id: str
     shell_type: str
     state: SessionState = "idle"
+    cwd: Optional[str] = None
 
 
 @dataclass
@@ -30,3 +31,6 @@ class Exec:
     command: str
     status: ExecStatus = "queued"
     exit_code: Optional[int] = None
+    stdout_size: int = 0
+    stderr_size: int = 0
+    more_available: bool = False

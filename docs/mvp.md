@@ -43,11 +43,15 @@ Responsibilities:
 - node_id
 - shell_type
 - state
+- cwd
 
 ### exec.start result
 - exec_id
 - session_id
 - status
+- exit_code
+- stdout_size
+- stderr_size
 - preview
 - more_available
 
@@ -66,6 +70,17 @@ Responsibilities:
 - next_offset
 - eof
 - content
+
+## Current MVP State
+
+Currently implemented locally:
+- `ping`
+- `node.describe`
+- `session.open`
+- `exec.start`
+- `exec.status`
+- `exec.read`
+- controller selftest covering the full local stdio path
 
 ## Explicit Non-Goals For MVP
 
