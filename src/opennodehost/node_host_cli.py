@@ -10,7 +10,7 @@ from pathlib import Path
 from opennodehost.runtime import NodeHostRuntime
 
 
-VERSION = "0.2.0"
+VERSION = "0.5.0"
 
 
 def emit(obj: dict) -> None:
@@ -79,9 +79,19 @@ def run_stdio() -> int:
                             "exec.status",
                             "exec.list",
                             "exec.interrupt",
+                            "pty.open",
+                            "pty.write",
+                            "pty.read",
+                            "pty.status",
+                            "pty.list",
+                            "pty.close",
                         ],
                         "protocol": "stdio-jsonl",
                         "version": VERSION,
+                        "features": {
+                            "pty": platform.system().lower() != "windows",
+                            "pty_mode": "pty" if platform.system().lower() != "windows" else "unsupported",
+                        },
                     },
                 })
             elif method == "session.open":
@@ -127,6 +137,43 @@ def run_stdio() -> int:
                         int(params.get("limit", 4096)),
                     ),
                 })
+            elif method == "pty.open":
+                if "session_id" not in params:
+                    emit(error_response(req_id, "invalid_request", "session_id is required"))
+                    continue
+                emit({
+                    "id": req_id,
+                    "ok": True,
+                    "result": state.open_pty(
+                        params["session_id"],
+                        params.get("shell"),
+                        params.get("cwd"),
+                        int(params.get("cols", 80)),
+                        int(params.get("rows", 24)),
+                    ),
+                })
+            elif method == "pty.write":
+                if "pty_id" not in params or "data" not in params:
+                    emit(error_response(req_id, "invalid_request", "pty_id and data are required"))
+                    continue
+                emit({"id": req_id, "ok": True, "result": state.write_pty(params["pty_id"], params["data"])})
+            elif method == "pty.read":
+                if "pty_id" not in params:
+                    emit(error_response(req_id, "invalid_request", "pty_id is required"))
+                    continue
+                emit({"id": req_id, "ok": True, "result": state.read_pty(params["pty_id"], int(params.get("offset", 0)), int(params.get("limit", 4096)))})
+            elif method == "pty.status":
+                if "pty_id" not in params:
+                    emit(error_response(req_id, "invalid_request", "pty_id is required"))
+                    continue
+                emit({"id": req_id, "ok": True, "result": state.status_pty(params["pty_id"])})
+            elif method == "pty.list":
+                emit({"id": req_id, "ok": True, "result": state.list_ptys(params.get("session_id"))})
+            elif method == "pty.close":
+                if "pty_id" not in params:
+                    emit(error_response(req_id, "invalid_request", "pty_id is required"))
+                    continue
+                emit({"id": req_id, "ok": True, "result": state.close_pty(params["pty_id"])})
             else:
                 emit(error_response(req_id, "not_implemented", f"method {method} not implemented"))
         except KeyError as e:

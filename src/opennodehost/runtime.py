@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import os
+import select
+import signal
 import subprocess
 import threading
 import uuid
 from pathlib import Path
 from typing import TextIO
+
+if os.name != "nt":
+    import pty
+else:
+    pty = None
 
 
 class NodeHostRuntime:
@@ -12,6 +20,7 @@ class NodeHostRuntime:
         self.node_id = node_id
         self.sessions: dict[str, dict] = {}
         self.execs: dict[str, dict] = {}
+        self.ptys: dict[str, dict] = {}
         self.buffer_dir = base_dir / "state"
         self.buffer_dir.mkdir(parents=True, exist_ok=True)
 
@@ -32,6 +41,9 @@ class NodeHostRuntime:
         if not session:
             raise KeyError("session_not_found")
         session["state"] = "closed"
+        for pty_id, record in list(self.ptys.items()):
+            if record["session_id"] == session_id and record["status"] == "running":
+                self.close_pty(pty_id)
         return {
             "session_id": session["session_id"],
             "node_id": session["node_id"],
@@ -176,6 +188,191 @@ class NodeHostRuntime:
             "content": content,
         }
 
+    def open_pty(self, session_id: str, shell: str | None = None, cwd: str | None = None, cols: int = 80, rows: int = 24) -> dict:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise KeyError("session_not_found")
+        if session["state"] == "closed":
+            raise RuntimeError("session_closed")
+
+        if os.name == "nt":
+            return self._open_pipe_fallback(session_id, shell, cwd, cols, rows)
+        return self._open_unix_pty(session_id, shell, cwd, cols, rows)
+
+    def write_pty(self, pty_id: str, data: str) -> dict:
+        record = self.ptys.get(pty_id)
+        if not record:
+            raise KeyError("pty_not_found")
+        if record["status"] != "running":
+            raise RuntimeError("pty_closed")
+        encoded = data.encode("utf-8")
+        if record["mode"] == "pty":
+            written = os.write(record["master_fd"], encoded)
+        else:
+            stdin = record.get("stdin")
+            if stdin is None:
+                raise RuntimeError("pty_closed")
+            stdin.write(data)
+            stdin.flush()
+            written = len(encoded)
+        return {"pty_id": pty_id, "bytes_written": written}
+
+    def read_pty(self, pty_id: str, offset: int = 0, limit: int = 4096) -> dict:
+        record = self.ptys.get(pty_id)
+        if not record:
+            raise KeyError("pty_not_found")
+        self._refresh_pty_metadata(record)
+        path = Path(record["output_path"])
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            chunk = handle.read(limit)
+            next_offset = offset + len(chunk)
+            eof = next_offset >= path.stat().st_size and record["status"] != "running"
+        content = chunk.decode("utf-8", errors="replace")
+        return {
+            "pty_id": pty_id,
+            "offset": offset,
+            "next_offset": next_offset,
+            "eof": eof,
+            "content": content,
+        }
+
+    def status_pty(self, pty_id: str) -> dict:
+        record = self.ptys.get(pty_id)
+        if not record:
+            raise KeyError("pty_not_found")
+        self._refresh_pty_metadata(record)
+        result = self._public_pty_record(record)
+        return {
+            "pty_id": result["pty_id"],
+            "session_id": result["session_id"],
+            "status": result["status"],
+            "pid": result["pid"],
+            "output_size": result["output_size"],
+            "mode": result["mode"],
+            "exit_code": result["exit_code"],
+        }
+
+    def list_ptys(self, session_id: str | None = None) -> dict:
+        items = []
+        for record in self.ptys.values():
+            if session_id and record["session_id"] != session_id:
+                continue
+            self._refresh_pty_metadata(record)
+            items.append(self._public_pty_record(record))
+        return {"items": items, "count": len(items)}
+
+    def close_pty(self, pty_id: str) -> dict:
+        record = self.ptys.get(pty_id)
+        if not record:
+            raise KeyError("pty_not_found")
+        proc = record.get("process")
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        self._finalize_pty(pty_id)
+        return self._public_pty_record(record)
+
+    def _open_unix_pty(self, session_id: str, shell: str | None, cwd: str | None, cols: int, rows: int) -> dict:
+        session = self.sessions[session_id]
+        pty_id = f"pty-{uuid.uuid4()}"
+        shell_cmd = shell or session["shell_type"] or "bash"
+        if shell_cmd == "powershell":
+            shell_cmd = "/bin/bash"
+        if shell_cmd == "bash":
+            cmd = ["/bin/bash", "-i"]
+        else:
+            cmd = [shell_cmd, "-i"]
+
+        master_fd, slave_fd = pty.openpty()
+        output_path = self.buffer_dir / f"{pty_id}.tty.log"
+        output_path.touch()
+        output_handle = output_path.open("ab")
+        proc = subprocess.Popen(
+            cmd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=cwd or session["cwd"],
+            start_new_session=True,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+
+        record = {
+            "pty_id": pty_id,
+            "session_id": session_id,
+            "shell_type": shell_cmd,
+            "status": "running",
+            "pid": proc.pid,
+            "process": proc,
+            "master_fd": master_fd,
+            "stdin": None,
+            "output_path": str(output_path),
+            "output_handle": output_handle,
+            "output_size": 0,
+            "cwd": cwd or session["cwd"],
+            "cols": cols,
+            "rows": rows,
+            "mode": "pty",
+            "preview": "",
+            "exit_code": None,
+        }
+        self.ptys[pty_id] = record
+        session["state"] = "running"
+        reader = threading.Thread(target=self._pty_reader, args=(pty_id,), daemon=True)
+        reader.start()
+        return self._public_pty_record(record)
+
+    def _open_pipe_fallback(self, session_id: str, shell: str | None, cwd: str | None, cols: int, rows: int) -> dict:
+        session = self.sessions[session_id]
+        pty_id = f"pty-{uuid.uuid4()}"
+        shell_cmd = shell or session["shell_type"] or "powershell"
+        if shell_cmd == "powershell":
+            cmd = ["powershell", "-NoLogo", "-NoProfile"]
+        else:
+            cmd = ["cmd.exe"]
+        output_path = self.buffer_dir / f"{pty_id}.tty.log"
+        output_path.touch()
+        output_handle = output_path.open("ab")
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=cwd or session["cwd"],
+        )
+        record = {
+            "pty_id": pty_id,
+            "session_id": session_id,
+            "shell_type": shell_cmd,
+            "status": "running",
+            "pid": proc.pid,
+            "process": proc,
+            "master_fd": None,
+            "stdin": proc.stdin,
+            "stdout": proc.stdout,
+            "output_path": str(output_path),
+            "output_handle": output_handle,
+            "output_size": 0,
+            "cwd": cwd or session["cwd"],
+            "cols": cols,
+            "rows": rows,
+            "mode": "pipe-fallback",
+            "preview": "",
+            "exit_code": None,
+        }
+        self.ptys[pty_id] = record
+        session["state"] = "running"
+        reader = threading.Thread(target=self._pipe_reader, args=(pty_id,), daemon=True)
+        reader.start()
+        return self._public_pty_record(record)
+
     def _public_exec_record(self, record: dict) -> dict:
         self._refresh_exec_metadata(record)
         return {
@@ -237,6 +434,99 @@ class NodeHostRuntime:
         session = self.sessions.get(record["session_id"])
         if session and session["state"] != "closed":
             session["state"] = "idle"
+
+    def _public_pty_record(self, record: dict) -> dict:
+        self._refresh_pty_metadata(record)
+        return {
+            "pty_id": record["pty_id"],
+            "session_id": record["session_id"],
+            "shell_type": record["shell_type"],
+            "status": record["status"],
+            "pid": record["pid"],
+            "output_path": record["output_path"],
+            "output_size": record["output_size"],
+            "cwd": record["cwd"],
+            "cols": record["cols"],
+            "rows": record["rows"],
+            "mode": record["mode"],
+            "preview": record["preview"],
+            "exit_code": record["exit_code"],
+        }
+
+    def _refresh_pty_metadata(self, record: dict) -> None:
+        path = Path(record["output_path"])
+        if path.exists():
+            record["output_size"] = path.stat().st_size
+            record["preview"] = self._read_preview(path)
+        proc = record.get("process")
+        if proc and proc.poll() is not None and record["status"] == "running":
+            self._finalize_pty(record["pty_id"])
+
+    def _pty_reader(self, pty_id: str) -> None:
+        record = self.ptys.get(pty_id)
+        if not record:
+            return
+        master_fd = record["master_fd"]
+        output_handle = record["output_handle"]
+        try:
+            while True:
+                ready, _, _ = select.select([master_fd], [], [], 0.1)
+                if master_fd in ready:
+                    try:
+                        chunk = os.read(master_fd, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    output_handle.write(chunk)
+                    output_handle.flush()
+                proc = record.get("process")
+                if proc and proc.poll() is not None and not ready:
+                    break
+        finally:
+            self._finalize_pty(pty_id)
+
+    def _pipe_reader(self, pty_id: str) -> None:
+        record = self.ptys.get(pty_id)
+        if not record:
+            return
+        stdout = record.get("stdout")
+        output_handle = record["output_handle"]
+        try:
+            while True:
+                if stdout is None:
+                    break
+                line = stdout.readline()
+                if not line:
+                    break
+                output_handle.write(line.encode("utf-8", errors="replace"))
+                output_handle.flush()
+        finally:
+            self._finalize_pty(pty_id)
+
+    def _finalize_pty(self, pty_id: str) -> None:
+        record = self.ptys.get(pty_id)
+        if not record:
+            return
+        if record["status"] == "closed":
+            return
+        proc = record.get("process")
+        if proc is not None and proc.poll() is None:
+            return
+        record["exit_code"] = proc.returncode if proc else record.get("exit_code")
+        record["status"] = "closed"
+        self._close_handle(record.get("output_handle"))
+        record["output_handle"] = None
+        if record.get("mode") == "pty" and record.get("master_fd") is not None:
+            try:
+                os.close(record["master_fd"])
+            except OSError:
+                pass
+        self._close_handle(record.get("stdin"))
+        session = self.sessions.get(record["session_id"])
+        if session and session["state"] != "closed":
+            session["state"] = "idle"
+        self._refresh_pty_metadata(record)
 
     def _read_preview(self, path: Path, limit: int = 200) -> str:
         with path.open("rb") as handle:

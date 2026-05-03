@@ -28,6 +28,16 @@ The controller currently adds these SSH options:
 
 These defaults are intended to make non-interactive automation less fragile.
 
+## PTY note
+
+OpenNodeHost does **not** turn the SSH transport itself into an interactive TTY. SSH remains a stdio JSONL control channel.
+
+Interactive shell behavior is implemented *inside the remote node-host*:
+- Unix targets use real PTY-backed shells
+- Windows targets currently use a pipe-fallback interactive shell mode
+
+This preserves protocol stability while still enabling interactive-style execution.
+
 ## Why this approach
 
 Compared with raw SSH command execution, this avoids pushing the entire control protocol through nested shell quoting.

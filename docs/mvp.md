@@ -96,6 +96,9 @@ Currently implemented locally:
 - persistent single-connection workflow execution via `workflow run`
 - target configuration support via `targets.yaml`
 - `target init/list/show/doctor`
+- `pty.open`, `pty.write`, `pty.read`, `pty.status`, `pty.list`, `pty.close`
+- local Unix PTY-backed sessions
+- Windows pipe-fallback interactive sessions
 - Windows SSH-backed remote workflow verified end-to-end
 
 Still pending for a fully validated SSH MVP:

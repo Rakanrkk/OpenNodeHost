@@ -144,6 +144,46 @@ def main() -> int:
     run_command.add_argument("--cwd")
     run_command.add_argument("--stream", default="stdout", choices=["stdout", "stderr"])
 
+    pty_parser = sub.add_parser("pty")
+    pty_sub = pty_parser.add_subparsers(dest="pty_command")
+
+    pty_open = pty_sub.add_parser("open")
+    pty_open.add_argument("session_id")
+    pty_open.add_argument("--target")
+    pty_open.add_argument("--shell")
+    pty_open.add_argument("--cwd")
+    pty_open.add_argument("--cols", type=int, default=80)
+    pty_open.add_argument("--rows", type=int, default=24)
+
+    pty_write = pty_sub.add_parser("write")
+    pty_write.add_argument("pty_id")
+    pty_write.add_argument("data")
+    pty_write.add_argument("--target")
+
+    pty_read = pty_sub.add_parser("read")
+    pty_read.add_argument("pty_id")
+    pty_read.add_argument("--target")
+    pty_read.add_argument("--offset", type=int, default=0)
+    pty_read.add_argument("--limit", type=int, default=4096)
+
+    pty_status = pty_sub.add_parser("status")
+    pty_status.add_argument("pty_id")
+    pty_status.add_argument("--target")
+
+    pty_list = pty_sub.add_parser("list")
+    pty_list.add_argument("--target")
+    pty_list.add_argument("--session-id")
+
+    pty_close = pty_sub.add_parser("close")
+    pty_close.add_argument("pty_id")
+    pty_close.add_argument("--target")
+
+    pty_run = pty_sub.add_parser("run")
+    pty_run.add_argument("command_text")
+    pty_run.add_argument("--target")
+    pty_run.add_argument("--shell", default="bash")
+    pty_run.add_argument("--cwd")
+
     args = parser.parse_args()
 
     if args.command == "version":
@@ -278,6 +318,33 @@ def main() -> int:
         finally:
             controller.close()
 
+    if args.command == "pty" and args.pty_command == "run":
+        controller = _build_persistent(args)
+        try:
+            session_payload = controller.call("session.open", {"shell": args.shell, "cwd": args.cwd})
+            session_id = session_payload["result"]["session_id"]
+            pty_payload = controller.call("pty.open", {"session_id": session_id, "shell": args.shell, "cwd": args.cwd, "cols": 80, "rows": 24})
+            pty_id = pty_payload["result"]["pty_id"]
+            controller.call("pty.write", {"pty_id": pty_id, "data": args.command_text + "\n"})
+            controller.call("pty.write", {"pty_id": pty_id, "data": "exit\n"})
+            status_payload = controller.call("pty.status", {"pty_id": pty_id})
+            while status_payload["result"]["status"] == "running":
+                status_payload = controller.call("pty.status", {"pty_id": pty_id})
+            read_payload = controller.call("pty.read", {"pty_id": pty_id, "offset": 0, "limit": 65536})
+            close_payload = controller.call("session.close", {"session_id": session_id})
+            payload = {
+                "ok": True,
+                "session": session_payload,
+                "pty": pty_payload,
+                "status": status_payload,
+                "read": read_payload,
+                "close": close_payload,
+            }
+            _print_output(payload, args.json)
+            return 0
+        finally:
+            controller.close()
+
     try:
         if args.command == "session":
             conn = _build_connection(args)
@@ -314,6 +381,32 @@ def main() -> int:
                     payload = _request(conn, "exec.interrupt", "exec-interrupt", {"exec_id": args.exec_id})
                 else:
                     parser.error("unknown exec subcommand")
+                _print_output(payload, args.json)
+                return 0
+            finally:
+                conn.process.terminate()
+                conn.process.wait(timeout=5)
+
+        if args.command == "pty":
+            conn = _build_connection(args)
+            try:
+                if args.pty_command == "open":
+                    payload = _request(conn, "pty.open", "pty-open", {"session_id": args.session_id, "shell": args.shell, "cwd": args.cwd, "cols": args.cols, "rows": args.rows})
+                elif args.pty_command == "write":
+                    payload = _request(conn, "pty.write", "pty-write", {"pty_id": args.pty_id, "data": args.data})
+                elif args.pty_command == "read":
+                    payload = _request(conn, "pty.read", "pty-read", {"pty_id": args.pty_id, "offset": args.offset, "limit": args.limit})
+                elif args.pty_command == "status":
+                    payload = _request(conn, "pty.status", "pty-status", {"pty_id": args.pty_id})
+                elif args.pty_command == "list":
+                    params = {}
+                    if args.session_id:
+                        params["session_id"] = args.session_id
+                    payload = _request(conn, "pty.list", "pty-list", params)
+                elif args.pty_command == "close":
+                    payload = _request(conn, "pty.close", "pty-close", {"pty_id": args.pty_id})
+                else:
+                    parser.error("unknown pty subcommand")
                 _print_output(payload, args.json)
                 return 0
             finally:

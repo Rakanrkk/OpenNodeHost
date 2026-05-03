@@ -45,6 +45,10 @@ What works now:
 - stdout/stderr buffer files with paged reads
 - controller CLI subcommands for session/exec operations
 - `workflow run` for persistent single-connection execution
+- target configuration support via `targets.yaml`
+- `target init/list/show/doctor`
+- local Unix PTY-backed shell sessions via `pty.*`
+- Windows pipe-fallback interactive shell sessions via `pty.*`
 - local selftest and pytest coverage
 - Windows SSH-backed node-host bootstrap and remote exec/read verified
 
@@ -148,6 +152,14 @@ This keeps a single controller <-> node-host connection open for the whole open/
 
 ```bash
 PYTHONPATH=src python src/opennodehost/controller_cli.py --json workflow run "printf 'hello-workflow'" --shell bash
+```
+
+### One-shot interactive shell style run
+
+For PTY-style execution on Unix and pipe-fallback interactive execution on Windows:
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json pty run "echo hello-pty" --shell bash
 ```
 
 ### Check exec status

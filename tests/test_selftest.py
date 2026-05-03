@@ -84,6 +84,20 @@ def test_workflow_run_local_json():
     assert "hello-workflow" in data["read"]["result"]["content"]
 
 
+def test_pty_run_local_json():
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "src" / "opennodehost" / "controller_cli.py"), "--json", "pty", "run", "echo hello-pty", "--shell", "bash"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=TEST_ENV,
+    )
+    data = json.loads(proc.stdout)
+    assert data["ok"] is True
+    assert data["status"]["result"]["status"] == "closed"
+    assert "hello-pty" in data["read"]["result"]["content"]
+
+
 def test_target_commands_and_resolution():
     with tempfile.TemporaryDirectory() as tmp:
         targets_file = Path(tmp) / "targets.yaml"
@@ -207,6 +221,24 @@ def test_runtime_session_and_exec_flow(tmp_path: Path):
     assert closed["state"] == "closed"
 
 
+def test_runtime_pty_flow(tmp_path: Path):
+    runtime = NodeHostRuntime(node_id="node-1", base_dir=tmp_path)
+    session = runtime.open_session(shell="bash", cwd=str(tmp_path))
+    pty_record = runtime.open_pty(session["session_id"], shell="bash")
+    runtime.write_pty(pty_record["pty_id"], "echo hello-pty-runtime\n")
+    runtime.write_pty(pty_record["pty_id"], "exit\n")
+    status = None
+    for _ in range(200):
+        status = runtime.status_pty(pty_record["pty_id"])
+        if status["status"] != "running":
+            break
+        time.sleep(0.02)
+    assert status is not None
+    assert status["status"] == "closed"
+    output = runtime.read_pty(pty_record["pty_id"], 0, 65536)
+    assert "hello-pty-runtime" in output["content"]
+
+
 def test_runtime_interrupt_exec(tmp_path: Path):
     runtime = NodeHostRuntime(node_id="node-1", base_dir=tmp_path)
     session = runtime.open_session(shell="bash", cwd=str(tmp_path))
@@ -248,6 +280,8 @@ def test_runtime_missing_records_and_invalid_stream(tmp_path: Path):
         time.sleep(0.01)
     with pytest.raises(ValueError):
         runtime.exec_read(exec_record["exec_id"], stream="invalid")
+    with pytest.raises(KeyError):
+        runtime.status_pty("missing")
 
 
 def test_node_connection_request_collects_event_and_response():
