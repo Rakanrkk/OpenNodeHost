@@ -3,6 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import select
+import sys
+import termios
+import tty
 from pathlib import Path
 
 from opennodehost.controller_runtime import (
@@ -15,7 +19,7 @@ from opennodehost.controller_runtime import (
 from opennodehost.targets import DEFAULT_TARGETS_PATH, infer_remote_command, load_targets, resolve_target, save_targets
 
 
-VERSION = "0.4.0"
+VERSION = "0.6.0"
 
 
 def _project_root() -> Path:
@@ -47,6 +51,9 @@ def _print_output(data: dict, as_json: bool) -> None:
         if set(result.keys()) == {"content", "offset", "next_offset", "eof", "stream", "exec_id"}:
             print(result["content"], end="")
             return
+        if set(result.keys()) == {"pty_id", "offset", "next_offset", "eof", "content"}:
+            print(result["content"], end="")
+            return
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
@@ -54,6 +61,32 @@ def _request(conn, method: str, req_id: str, params: dict) -> dict:
     messages = conn.request({"id": req_id, "method": method, "params": params})
     result = response_result(messages, req_id)
     return {"ok": True, "messages": messages, "result": result}
+
+
+def _attach_loop(controller, pty_id: str) -> None:
+    stdin_fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(stdin_fd)
+    offset = 0
+    try:
+        tty.setraw(stdin_fd)
+        while True:
+            status = controller.call("pty.status", {"pty_id": pty_id})
+            read_payload = controller.call("pty.read", {"pty_id": pty_id, "offset": offset, "limit": 65536})
+            chunk = read_payload["result"]["content"]
+            if chunk:
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
+                offset = read_payload["result"]["next_offset"]
+            if status["result"]["status"] != "running":
+                break
+            ready, _, _ = select.select([stdin_fd], [], [], 0.05)
+            if stdin_fd in ready:
+                data = os.read(stdin_fd, 1024)
+                if not data:
+                    break
+                controller.call("pty.write", {"pty_id": pty_id, "data": data.decode("utf-8", errors="replace")})
+    finally:
+        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
 
 
 def main() -> int:
@@ -183,6 +216,11 @@ def main() -> int:
     pty_run.add_argument("--target")
     pty_run.add_argument("--shell", default="bash")
     pty_run.add_argument("--cwd")
+
+    pty_attach = pty_sub.add_parser("attach")
+    pty_attach.add_argument("--target")
+    pty_attach.add_argument("--shell", default="bash")
+    pty_attach.add_argument("--cwd")
 
     args = parser.parse_args()
 
@@ -341,6 +379,20 @@ def main() -> int:
                 "close": close_payload,
             }
             _print_output(payload, args.json)
+            return 0
+        finally:
+            controller.close()
+
+    if args.command == "pty" and args.pty_command == "attach":
+        controller = _build_persistent(args)
+        try:
+            session_payload = controller.call("session.open", {"shell": args.shell, "cwd": args.cwd})
+            session_id = session_payload["result"]["session_id"]
+            pty_payload = controller.call("pty.open", {"session_id": session_id, "shell": args.shell, "cwd": args.cwd, "cols": 80, "rows": 24})
+            pty_id = pty_payload["result"]["pty_id"]
+            _attach_loop(controller, pty_id)
+            controller.call("pty.close", {"pty_id": pty_id})
+            controller.call("session.close", {"session_id": session_id})
             return 0
         finally:
             controller.close()
