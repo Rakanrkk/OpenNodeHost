@@ -19,6 +19,7 @@ class NodeConnection:
         self.process.stdin.flush()
 
         messages: list[dict[str, Any]] = []
+        target_id = req.get("id")
         while True:
             line = self.process.stdout.readline()
             if not line:
@@ -28,7 +29,7 @@ class NodeConnection:
                 raise RuntimeError(f"node host closed stdout unexpectedly: {stderr}")
             msg = json.loads(line)
             messages.append(msg)
-            if msg.get("id") == req.get("id"):
+            if msg.get("id") == target_id:
                 return messages
 
 
@@ -45,7 +46,22 @@ def connect_local_stdio(project_root: Path) -> NodeConnection:
 
 
 def connect_ssh_stdio(target: str, remote_command: str = "opennodehost-node --stdio") -> NodeConnection:
-    cmd = ["ssh", "-T", target, remote_command]
+    cmd = [
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "ServerAliveCountMax=3",
+        target,
+        remote_command,
+    ]
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
@@ -56,8 +72,19 @@ def connect_ssh_stdio(target: str, remote_command: str = "opennodehost-node --st
     return NodeConnection(proc)
 
 
-def response_result(messages: list[dict[str, Any]]) -> dict[str, Any]:
+def response_result(messages: list[dict[str, Any]], request_id: str | None = None) -> dict[str, Any]:
+    target_id = request_id
+    if target_id is None:
+        for msg in messages:
+            if isinstance(msg.get("id"), str):
+                target_id = msg["id"]
+                break
     for msg in reversed(messages):
-        if "id" in msg and msg.get("ok") is True:
+        if msg.get("id") != target_id:
+            continue
+        if msg.get("ok") is True:
             return msg["result"]
-    raise RuntimeError("no successful response found")
+        if msg.get("ok") is False:
+            error = msg.get("error", {})
+            raise RuntimeError(f"{error.get('type', 'request_failed')}: {error.get('message', 'unknown error')}")
+    raise RuntimeError("no response found for request")
