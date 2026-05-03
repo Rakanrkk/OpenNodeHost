@@ -89,8 +89,8 @@ def run_stdio() -> int:
                         "protocol": "stdio-jsonl",
                         "version": VERSION,
                         "features": {
-                            "pty": platform.system().lower() != "windows",
-                            "pty_mode": "pty" if platform.system().lower() != "windows" else "unsupported",
+                            "pty": True,
+                            "pty_mode": "conpty" if platform.system().lower() == "windows" and state.pty_backend is not None else ("pipe-fallback" if platform.system().lower() == "windows" else "pty"),
                         },
                     },
                 })

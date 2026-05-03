@@ -284,6 +284,90 @@ def test_runtime_missing_records_and_invalid_stream(tmp_path: Path):
         runtime.status_pty("missing")
 
 
+def test_runtime_windows_pty_uses_pywinpty_when_available(tmp_path: Path):
+    class FakeSpawnProc:
+        def __init__(self):
+            self.pid = 4321
+            self.exitstatus = None
+            self.closed = False
+            self._reads = [b"hello from conpty\r\n", b""]
+            self.writes = []
+            self.resize_calls = []
+
+        def read(self, size: int):
+            if self._reads:
+                chunk = self._reads.pop(0)
+                if not self._reads:
+                    self.exitstatus = 0
+                return chunk
+            self.exitstatus = 0
+            return b""
+
+        def write(self, data):
+            self.writes.append(data)
+            return len(data)
+
+        def close(self, force=False):
+            self.closed = True
+            self.exitstatus = 0
+
+        def isalive(self):
+            return self.exitstatus is None
+
+        def setwinsize(self, rows: int, cols: int):
+            self.resize_calls.append((rows, cols))
+
+    class FakePtyProcess:
+        last = None
+
+        @classmethod
+        def spawn(cls, argv, cwd=None, dimensions=None):
+            cls.argv = argv
+            cls.cwd = cwd
+            cls.dimensions = dimensions
+            cls.last = FakeSpawnProc()
+            return cls.last
+
+    runtime = NodeHostRuntime(node_id="node-1", base_dir=tmp_path, force_platform="windows", pty_backend=FakePtyProcess)
+    session = runtime.open_session(shell="powershell", cwd=str(tmp_path))
+    record = runtime.open_pty(session["session_id"], shell="powershell", cols=100, rows=40)
+    assert record["mode"] == "conpty"
+    assert FakePtyProcess.argv[0].lower().endswith("powershell.exe")
+    assert FakePtyProcess.dimensions == (40, 100)
+
+    assert FakePtyProcess.last.exitstatus == 0
+    output = runtime.read_pty(record["pty_id"], 0, 4096)
+    assert "hello from conpty" in output["content"]
+    status = runtime.status_pty(record["pty_id"])
+    assert status["status"] == "closed"
+
+
+def test_runtime_windows_pty_falls_back_without_pywinpty(tmp_path: Path):
+    runtime = NodeHostRuntime(node_id="node-1", base_dir=tmp_path, force_platform="windows", pty_backend=False)
+    session = runtime.open_session(shell="powershell", cwd=str(tmp_path))
+
+    class FakeProc:
+        def __init__(self):
+            self.pid = 9876
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO("")
+            self.returncode = 0
+
+        def poll(self):
+            return 0
+
+        def terminate(self):
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    with patch("opennodehost.runtime.subprocess.Popen", return_value=FakeProc()):
+        record = runtime.open_pty(session["session_id"], shell="powershell")
+    assert record["mode"] == "pipe-fallback"
+    runtime.close_pty(record["pty_id"])
+
+
 def test_node_connection_request_collects_event_and_response():
     process = type("FakeProcess", (), {})()
     process.stdin = io.StringIO()

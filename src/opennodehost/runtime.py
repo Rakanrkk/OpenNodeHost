@@ -7,7 +7,12 @@ import subprocess
 import threading
 import uuid
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
+
+try:
+    from winpty import PtyProcess as WinPtyProcess
+except ImportError:
+    WinPtyProcess = None
 
 if os.name != "nt":
     import pty
@@ -16,13 +21,27 @@ else:
 
 
 class NodeHostRuntime:
-    def __init__(self, node_id: str, base_dir: Path) -> None:
+    def __init__(
+        self,
+        node_id: str,
+        base_dir: Path,
+        *,
+        force_platform: str | None = None,
+        pty_backend: Any | None = None,
+    ) -> None:
         self.node_id = node_id
         self.sessions: dict[str, dict] = {}
         self.execs: dict[str, dict] = {}
         self.ptys: dict[str, dict] = {}
         self.buffer_dir = base_dir / "state"
         self.buffer_dir.mkdir(parents=True, exist_ok=True)
+        self.platform = force_platform or ("windows" if os.name == "nt" else "unix")
+        if pty_backend is None:
+            self.pty_backend = WinPtyProcess
+        elif pty_backend is False:
+            self.pty_backend = None
+        else:
+            self.pty_backend = pty_backend
 
     def open_session(self, shell: str, cwd: str | None = None) -> dict:
         session_id = f"sess-{uuid.uuid4()}"
@@ -195,7 +214,9 @@ class NodeHostRuntime:
         if session["state"] == "closed":
             raise RuntimeError("session_closed")
 
-        if os.name == "nt":
+        if self.platform == "windows":
+            if self.pty_backend is not None:
+                return self._open_windows_conpty(session_id, shell, cwd, cols, rows)
             return self._open_pipe_fallback(session_id, shell, cwd, cols, rows)
         return self._open_unix_pty(session_id, shell, cwd, cols, rows)
 
@@ -206,8 +227,14 @@ class NodeHostRuntime:
         if record["status"] != "running":
             raise RuntimeError("pty_closed")
         encoded = data.encode("utf-8")
-        if record["mode"] == "pty":
+        mode = record["mode"]
+        if mode == "pty":
             written = os.write(record["master_fd"], encoded)
+        elif mode == "conpty":
+            pty_proc = record.get("pty_process")
+            if pty_proc is None:
+                raise RuntimeError("pty_closed")
+            written = pty_proc.write(encoded)
         else:
             stdin = record.get("stdin")
             if stdin is None:
@@ -274,6 +301,12 @@ class NodeHostRuntime:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
+        pty_proc = record.get("pty_process")
+        if pty_proc is not None and self._pty_process_is_alive(pty_proc):
+            try:
+                pty_proc.close(True)
+            except TypeError:
+                pty_proc.close()
         self._finalize_pty(pty_id)
         return self._public_pty_record(record)
 
@@ -310,6 +343,7 @@ class NodeHostRuntime:
             "status": "running",
             "pid": proc.pid,
             "process": proc,
+            "pty_process": None,
             "master_fd": master_fd,
             "stdin": None,
             "output_path": str(output_path),
@@ -325,6 +359,41 @@ class NodeHostRuntime:
         self.ptys[pty_id] = record
         session["state"] = "running"
         reader = threading.Thread(target=self._pty_reader, args=(pty_id,), daemon=True)
+        reader.start()
+        return self._public_pty_record(record)
+
+    def _open_windows_conpty(self, session_id: str, shell: str | None, cwd: str | None, cols: int, rows: int) -> dict:
+        session = self.sessions[session_id]
+        pty_id = f"pty-{uuid.uuid4()}"
+        shell_cmd = shell or session["shell_type"] or "powershell"
+        argv = self._windows_shell_argv(shell_cmd)
+        output_path = self.buffer_dir / f"{pty_id}.tty.log"
+        output_path.touch()
+        output_handle = output_path.open("ab")
+        pty_proc = self.pty_backend.spawn(argv, cwd=cwd or session["cwd"], dimensions=(rows, cols))
+        record = {
+            "pty_id": pty_id,
+            "session_id": session_id,
+            "shell_type": shell_cmd,
+            "status": "running",
+            "pid": getattr(pty_proc, "pid", None),
+            "process": None,
+            "pty_process": pty_proc,
+            "master_fd": None,
+            "stdin": None,
+            "output_path": str(output_path),
+            "output_handle": output_handle,
+            "output_size": 0,
+            "cwd": cwd or session["cwd"],
+            "cols": cols,
+            "rows": rows,
+            "mode": "conpty",
+            "preview": "",
+            "exit_code": None,
+        }
+        self.ptys[pty_id] = record
+        session["state"] = "running"
+        reader = threading.Thread(target=self._conpty_reader, args=(pty_id,), daemon=True)
         reader.start()
         return self._public_pty_record(record)
 
@@ -354,6 +423,7 @@ class NodeHostRuntime:
             "status": "running",
             "pid": proc.pid,
             "process": proc,
+            "pty_process": None,
             "master_fd": None,
             "stdin": proc.stdin,
             "stdout": proc.stdout,
@@ -458,6 +528,11 @@ class NodeHostRuntime:
         if path.exists():
             record["output_size"] = path.stat().st_size
             record["preview"] = self._read_preview(path)
+        if record.get("mode") == "conpty":
+            pty_proc = record.get("pty_process")
+            if pty_proc is not None and not self._pty_process_is_alive(pty_proc) and record["status"] == "running":
+                self._finalize_pty(record["pty_id"])
+            return
         proc = record.get("process")
         if proc and proc.poll() is not None and record["status"] == "running":
             self._finalize_pty(record["pty_id"])
@@ -504,16 +579,52 @@ class NodeHostRuntime:
         finally:
             self._finalize_pty(pty_id)
 
+    def _conpty_reader(self, pty_id: str) -> None:
+        record = self.ptys.get(pty_id)
+        if not record:
+            return
+        pty_proc = record.get("pty_process")
+        output_handle = record["output_handle"]
+        if pty_proc is None:
+            self._finalize_pty(pty_id)
+            return
+        try:
+            while True:
+                try:
+                    chunk = pty_proc.read(4096)
+                except EOFError:
+                    break
+                except OSError:
+                    break
+                if not chunk:
+                    if not self._pty_process_is_alive(pty_proc):
+                        break
+                    continue
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8", errors="replace")
+                output_handle.write(chunk)
+                output_handle.flush()
+        finally:
+            self._finalize_pty(pty_id)
+
     def _finalize_pty(self, pty_id: str) -> None:
         record = self.ptys.get(pty_id)
         if not record:
             return
         if record["status"] == "closed":
             return
-        proc = record.get("process")
-        if proc is not None and proc.poll() is None:
-            return
-        record["exit_code"] = proc.returncode if proc else record.get("exit_code")
+        mode = record.get("mode")
+        if mode == "conpty":
+            pty_proc = record.get("pty_process")
+            if pty_proc is not None and self._pty_process_is_alive(pty_proc):
+                return
+            exit_code = getattr(pty_proc, "exitstatus", None) if pty_proc is not None else record.get("exit_code")
+        else:
+            proc = record.get("process")
+            if proc is not None and proc.poll() is None:
+                return
+            exit_code = proc.returncode if proc else record.get("exit_code")
+        record["exit_code"] = exit_code
         record["status"] = "closed"
         self._close_handle(record.get("output_handle"))
         record["output_handle"] = None
@@ -536,3 +647,16 @@ class NodeHostRuntime:
     def _close_handle(self, handle: TextIO | None) -> None:
         if handle is not None and not handle.closed:
             handle.close()
+
+    def _pty_process_is_alive(self, pty_proc: Any) -> bool:
+        if hasattr(pty_proc, "isalive"):
+            return bool(pty_proc.isalive())
+        return getattr(pty_proc, "exitstatus", None) is None
+
+    def _windows_shell_argv(self, shell_cmd: str) -> list[str]:
+        normalized = (shell_cmd or "powershell").lower()
+        if normalized in {"powershell", "pwsh", "powershell.exe"}:
+            return ["powershell.exe", "-NoLogo", "-NoProfile"]
+        if normalized in {"cmd", "cmd.exe"}:
+            return ["cmd.exe"]
+        return [shell_cmd]

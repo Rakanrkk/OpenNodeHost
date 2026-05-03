@@ -17,7 +17,7 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent"
 ]
-dependencies = ["PyYAML>=6.0"]
+dependencies = ["PyYAML>=6.0", "pywinpty>=3.0.0; platform_system == 'Windows'"]
 
 [project.scripts]
 opennodehost = "opennodehost.controller_cli:main"

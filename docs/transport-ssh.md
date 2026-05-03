@@ -34,7 +34,7 @@ OpenNodeHost does **not** turn the SSH transport itself into an interactive TTY.
 
 Interactive shell behavior is implemented *inside the remote node-host*:
 - Unix targets use real PTY-backed shells
-- Windows targets currently use a pipe-fallback interactive shell mode
+- Windows targets use ConPTY via `pywinpty` when available, otherwise a pipe-fallback interactive shell mode
 
 This preserves protocol stability while still enabling interactive-style execution.
 

@@ -48,7 +48,7 @@ What works now:
 - target configuration support via `targets.yaml`
 - `target init/list/show/doctor`
 - local Unix PTY-backed shell sessions via `pty.*`
-- Windows pipe-fallback interactive shell sessions via `pty.*`
+- Windows ConPTY-backed shell sessions via `pywinpty` when available, with `pipe-fallback` as fallback
 - local selftest and pytest coverage
 - Windows SSH-backed node-host bootstrap and remote exec/read verified
 
@@ -156,7 +156,7 @@ PYTHONPATH=src python src/opennodehost/controller_cli.py --json workflow run "pr
 
 ### One-shot interactive shell style run
 
-For PTY-style execution on Unix and pipe-fallback interactive execution on Windows:
+For PTY-style execution on Unix and interactive execution on Windows (ConPTY via `pywinpty` when available, otherwise pipe-fallback):
 
 ```bash
 PYTHONPATH=src python src/opennodehost/controller_cli.py --json pty run "echo hello-pty" --shell bash
