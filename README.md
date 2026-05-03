@@ -35,7 +35,7 @@ OpenNodeHost aims to provide a small, durable execution layer with these propert
 
 ## Current Status
 
-Current milestone: **local MVP working, SSH path scaffolded**.
+Current milestone: **local MVP working, Windows SSH end-to-end workflow verified**.
 
 What works now:
 - local controller <-> node-host stdio JSONL protocol
@@ -44,7 +44,9 @@ What works now:
 - asynchronous exec lifecycle with background process tracking
 - stdout/stderr buffer files with paged reads
 - controller CLI subcommands for session/exec operations
+- `workflow run` for persistent single-connection execution
 - local selftest and pytest coverage
+- Windows SSH-backed node-host bootstrap and remote exec/read verified
 
 What is still early:
 - real SSH integration is scaffolded but not yet fully validated against a remote Linux host
@@ -125,6 +127,14 @@ PYTHONPATH=src python src/opennodehost/controller_cli.py --json session list
 
 ```bash
 PYTHONPATH=src python src/opennodehost/controller_cli.py --json exec start <session_id> "printf 'hello from exec'"
+```
+
+### One-shot persistent workflow run
+
+This keeps a single controller <-> node-host connection open for the whole open/exec/status/read/close flow:
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json workflow run "printf 'hello-workflow'" --shell bash
 ```
 
 ### Check exec status

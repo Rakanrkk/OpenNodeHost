@@ -9,7 +9,13 @@ from unittest.mock import patch
 
 import pytest
 
-from opennodehost.controller_runtime import NodeConnection, connect_ssh_stdio, response_result
+from opennodehost.controller_cli import _print_output
+from opennodehost.controller_runtime import (
+    NodeConnection,
+    PersistentController,
+    connect_ssh_stdio,
+    response_result,
+)
 from opennodehost.runtime import NodeHostRuntime
 
 
@@ -62,6 +68,20 @@ def test_controller_cli_real_commands_local():
     assert opened["result"]["session_id"].startswith("sess-")
 
 
+def test_workflow_run_local_json():
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "src" / "opennodehost" / "controller_cli.py"), "--json", "workflow", "run", "printf 'hello-workflow'", "--shell", "bash"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=TEST_ENV,
+    )
+    data = json.loads(proc.stdout)
+    assert data["ok"] is True
+    assert data["status"]["result"]["status"] == "completed"
+    assert "hello-workflow" in data["read"]["result"]["content"]
+
+
 def test_controller_cli_human_readable_exec_read_output(tmp_path: Path):
     runtime = NodeHostRuntime(node_id="node-1", base_dir=tmp_path)
     session = runtime.open_session(shell="bash", cwd=str(tmp_path))
@@ -75,7 +95,6 @@ def test_controller_cli_human_readable_exec_read_output(tmp_path: Path):
         "ok": True,
         "result": runtime.exec_read(exec_record["exec_id"], stream="stdout", offset=0, limit=32),
     }
-    from opennodehost.controller_cli import _print_output
     buf = io.StringIO()
     stdout = sys.stdout
     try:
@@ -195,6 +214,22 @@ def test_node_connection_request_raises_on_closed_stdout():
     conn = NodeConnection(process=process)
     with pytest.raises(RuntimeError, match="remote crashed"):
         conn.request({"id": "1", "method": "ping", "params": {}})
+
+
+def test_persistent_controller_reuses_connection():
+    process = type("FakeProcess", (), {})()
+    process.stdin = io.StringIO()
+    process.stdout = io.StringIO(
+        '{"event":"node.ready","payload":{}}\n'
+        '{"id":"pc-1","ok":true,"result":{"session_id":"sess-1"}}\n'
+        '{"id":"pc-2","ok":true,"result":{"exec_id":"exec-1"}}\n'
+    )
+    process.stderr = io.StringIO("")
+    controller = PersistentController(NodeConnection(process=process))
+    first = controller.call("session.open", {"shell": "bash"})
+    second = controller.call("exec.start", {"session_id": "sess-1", "command": "echo ok"})
+    assert first["result"]["session_id"] == "sess-1"
+    assert second["result"]["exec_id"] == "exec-1"
 
 
 def test_response_result_errors_and_missing_response():

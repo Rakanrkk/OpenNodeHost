@@ -5,10 +5,16 @@ import json
 import os
 from pathlib import Path
 
-from opennodehost.controller_runtime import connect_local_stdio, connect_ssh_stdio, response_result
+from opennodehost.controller_runtime import (
+    connect_local_stdio,
+    connect_ssh_stdio,
+    make_persistent_local,
+    make_persistent_ssh,
+    response_result,
+)
 
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 def _project_root() -> Path:
@@ -20,6 +26,13 @@ def _build_connection(args: argparse.Namespace):
         remote_command = getattr(args, "remote_command", None) or "opennodehost-node --stdio"
         return connect_ssh_stdio(args.target, remote_command=remote_command)
     return connect_local_stdio(_project_root())
+
+
+def _build_persistent(args: argparse.Namespace):
+    if getattr(args, "target", None):
+        remote_command = getattr(args, "remote_command", None) or "opennodehost-node --stdio"
+        return make_persistent_ssh(args.target, remote_command=remote_command)
+    return make_persistent_local(_project_root())
 
 
 def _print_output(data: dict, as_json: bool) -> None:
@@ -95,6 +108,16 @@ def main() -> int:
     exec_interrupt.add_argument("exec_id")
     exec_interrupt.add_argument("--target")
 
+    workflow = sub.add_parser("workflow")
+    workflow_sub = workflow.add_subparsers(dest="workflow_command")
+
+    run_command = workflow_sub.add_parser("run")
+    run_command.add_argument("command_text")
+    run_command.add_argument("--target")
+    run_command.add_argument("--shell", default="bash")
+    run_command.add_argument("--cwd")
+    run_command.add_argument("--stream", default="stdout", choices=["stdout", "stderr"])
+
     args = parser.parse_args()
 
     if args.command == "version":
@@ -158,6 +181,31 @@ def main() -> int:
         finally:
             conn.process.terminate()
             conn.process.wait(timeout=5)
+
+    if args.command == "workflow" and args.workflow_command == "run":
+        controller = _build_persistent(args)
+        try:
+            session_payload = controller.call("session.open", {"shell": args.shell, "cwd": args.cwd})
+            session_id = session_payload["result"]["session_id"]
+            exec_payload = controller.call("exec.start", {"session_id": session_id, "command": args.command_text})
+            exec_id = exec_payload["result"]["exec_id"]
+            status_payload = controller.call("exec.status", {"exec_id": exec_id})
+            while status_payload["result"]["status"] == "running":
+                status_payload = controller.call("exec.status", {"exec_id": exec_id})
+            read_payload = controller.call("exec.read", {"exec_id": exec_id, "stream": args.stream, "offset": 0, "limit": 65536})
+            close_payload = controller.call("session.close", {"session_id": session_id})
+            payload = {
+                "ok": True,
+                "session": session_payload,
+                "exec": exec_payload,
+                "status": status_payload,
+                "read": read_payload,
+                "close": close_payload,
+            }
+            _print_output(payload, args.json)
+            return 0
+        finally:
+            controller.close()
 
     try:
         if args.command == "session":

@@ -69,6 +69,14 @@ PYTHONPATH=src python src/opennodehost/controller_cli.py --json \
   session open --target user@host --shell bash
 ```
 
+### Run a full remote workflow on one persistent connection
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json \
+  --remote-command "python -m opennodehost.node_host_cli --stdio" \
+  workflow run "uname -a" --target user@host --shell bash
+```
+
 ### Start a remote exec
 
 ```bash

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,26 @@ class NodeConnection:
             messages.append(msg)
             if msg.get("id") == target_id:
                 return messages
+
+
+class PersistentController:
+    def __init__(self, connection: NodeConnection) -> None:
+        self.connection = connection
+        self._counter = 0
+
+    def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._counter += 1
+        req_id = f"pc-{self._counter}"
+        messages = self.connection.request({"id": req_id, "method": method, "params": params or {}})
+        return {"messages": messages, "result": response_result(messages, req_id)}
+
+    def close(self) -> None:
+        try:
+            self.connection.process.terminate()
+            self.connection.process.wait(timeout=5)
+        except Exception:
+            self.connection.process.kill()
+            self.connection.process.wait(timeout=5)
 
 
 def connect_local_stdio(project_root: Path) -> NodeConnection:
@@ -70,6 +91,14 @@ def connect_ssh_stdio(target: str, remote_command: str = "opennodehost-node --st
         text=True,
     )
     return NodeConnection(proc)
+
+
+def make_persistent_local(project_root: Path) -> PersistentController:
+    return PersistentController(connect_local_stdio(project_root))
+
+
+def make_persistent_ssh(target: str, remote_command: str = "opennodehost-node --stdio") -> PersistentController:
+    return PersistentController(connect_ssh_stdio(target, remote_command))
 
 
 def response_result(messages: list[dict[str, Any]], request_id: str | None = None) -> dict[str, Any]:
