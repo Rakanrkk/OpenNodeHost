@@ -94,6 +94,8 @@ Currently implemented locally:
 - controller selftest covering the full local stdio path
 - pytest coverage for runtime, transport mock, and protocol helper behavior
 - persistent single-connection workflow execution via `workflow run`
+- target configuration support via `targets.yaml`
+- `target init/list/show/doctor`
 - Windows SSH-backed remote workflow verified end-to-end
 
 Still pending for a fully validated SSH MVP:

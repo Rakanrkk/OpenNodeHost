@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +18,7 @@ from opennodehost.controller_runtime import (
     response_result,
 )
 from opennodehost.runtime import NodeHostRuntime
+from opennodehost.targets import infer_remote_command, load_targets, resolve_target, save_targets
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +82,59 @@ def test_workflow_run_local_json():
     assert data["ok"] is True
     assert data["status"]["result"]["status"] == "completed"
     assert "hello-workflow" in data["read"]["result"]["content"]
+
+
+def test_target_commands_and_resolution():
+    with tempfile.TemporaryDirectory() as tmp:
+        targets_file = Path(tmp) / "targets.yaml"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "src" / "opennodehost" / "controller_cli.py"),
+                "--json",
+                "--targets-file",
+                str(targets_file),
+                "target",
+                "init",
+                "win-dev",
+                "--host",
+                "192.168.2.206",
+                "--user",
+                "Administrator",
+                "--platform",
+                "windows",
+                "--shell",
+                "powershell",
+                "--launch-mode",
+                "python-module",
+                "--python-bin",
+                "python",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=TEST_ENV,
+        )
+        data = json.loads(proc.stdout)
+        assert data["ok"] is True
+        listed = subprocess.run(
+            [sys.executable, str(ROOT / "src" / "opennodehost" / "controller_cli.py"), "--json", "--targets-file", str(targets_file), "target", "list"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=TEST_ENV,
+        )
+        listed_data = json.loads(listed.stdout)
+        assert "win-dev" in listed_data["targets"]
+        shown = subprocess.run(
+            [sys.executable, str(ROOT / "src" / "opennodehost" / "controller_cli.py"), "--json", "--targets-file", str(targets_file), "target", "show", "win-dev"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=TEST_ENV,
+        )
+        shown_data = json.loads(shown.stdout)
+        assert shown_data["target"]["target"] == "Administrator@192.168.2.206"
 
 
 def test_controller_cli_human_readable_exec_read_output(tmp_path: Path):
@@ -237,6 +292,28 @@ def test_response_result_errors_and_missing_response():
         response_result([{"id": "x", "ok": False, "error": {"type": "bad_request", "message": "no session"}}], "x")
     with pytest.raises(RuntimeError, match="no response found"):
         response_result([{"event": "node.ready", "payload": {}}], "x")
+
+
+def test_targets_helpers():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "targets.yaml"
+        payload = {
+            "targets": {
+                "win-dev": {
+                    "host": "192.168.2.206",
+                    "user": "Administrator",
+                    "platform": "windows",
+                    "launch": {"mode": "python-module"},
+                    "python_bin": "python",
+                }
+            }
+        }
+        save_targets(payload, str(path))
+        loaded = load_targets(str(path))
+        assert "win-dev" in loaded["targets"]
+        resolved = resolve_target("win-dev", str(path))
+        assert resolved["target"] == "Administrator@192.168.2.206"
+        assert infer_remote_command(resolved) == "python -m opennodehost.node_host_cli --stdio"
 
 
 def test_connect_ssh_stdio_builds_expected_ssh_command():

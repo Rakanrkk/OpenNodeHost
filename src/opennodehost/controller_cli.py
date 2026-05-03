@@ -12,6 +12,7 @@ from opennodehost.controller_runtime import (
     make_persistent_ssh,
     response_result,
 )
+from opennodehost.targets import DEFAULT_TARGETS_PATH, infer_remote_command, load_targets, resolve_target, save_targets
 
 
 VERSION = "0.4.0"
@@ -23,14 +24,16 @@ def _project_root() -> Path:
 
 def _build_connection(args: argparse.Namespace):
     if getattr(args, "target", None):
-        remote_command = getattr(args, "remote_command", None) or "opennodehost-node --stdio"
+        cfg = resolve_target(args.target)
+        remote_command = getattr(args, "remote_command", None) or infer_remote_command(cfg)
         return connect_ssh_stdio(args.target, remote_command=remote_command)
     return connect_local_stdio(_project_root())
 
 
 def _build_persistent(args: argparse.Namespace):
     if getattr(args, "target", None):
-        remote_command = getattr(args, "remote_command", None) or "opennodehost-node --stdio"
+        cfg = resolve_target(args.target)
+        remote_command = getattr(args, "remote_command", None) or infer_remote_command(cfg)
         return make_persistent_ssh(args.target, remote_command=remote_command)
     return make_persistent_local(_project_root())
 
@@ -57,6 +60,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="opennodehost")
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument("--remote-command", default=os.environ.get("OPENNODEHOST_REMOTE_COMMAND"), help="remote node-host launch command for SSH mode")
+    parser.add_argument("--targets-file", default=os.environ.get("OPENNODEHOST_TARGETS_FILE"), help="override path to targets.yaml")
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("version")
@@ -65,6 +69,28 @@ def main() -> int:
 
     ssh_selftest = sub.add_parser("ssh-selftest")
     ssh_selftest.add_argument("target")
+
+    target_parser = sub.add_parser("target")
+    target_sub = target_parser.add_subparsers(dest="target_command")
+
+    target_sub.add_parser("list")
+
+    target_show = target_sub.add_parser("show")
+    target_show.add_argument("name")
+
+    target_doctor = target_sub.add_parser("doctor")
+    target_doctor.add_argument("name")
+
+    target_init = target_sub.add_parser("init")
+    target_init.add_argument("name")
+    target_init.add_argument("--host", required=True)
+    target_init.add_argument("--user")
+    target_init.add_argument("--port", type=int)
+    target_init.add_argument("--platform")
+    target_init.add_argument("--shell")
+    target_init.add_argument("--python-bin")
+    target_init.add_argument("--launch-mode", default="auto", choices=["auto", "installed", "python-module", "custom"])
+    target_init.add_argument("--launch-command")
 
     session = sub.add_parser("session")
     session_sub = session.add_subparsers(dest="session_command")
@@ -127,6 +153,51 @@ def main() -> int:
     if args.command == "doctor":
         print(json.dumps({"ok": True, "message": "controller bootstrap skeleton only"}))
         return 0
+
+    if args.command == "target":
+        data = load_targets(args.targets_file)
+        if args.target_command == "list":
+            payload = {"ok": True, "targets": data.get("targets", {}), "path": str(Path(args.targets_file).expanduser()) if args.targets_file else str(DEFAULT_TARGETS_PATH)}
+            _print_output(payload, args.json)
+            return 0
+        if args.target_command == "show":
+            payload = {"ok": True, "target": resolve_target(args.name, args.targets_file)}
+            _print_output(payload, args.json)
+            return 0
+        if args.target_command == "init":
+            targets = data.setdefault("targets", {})
+            entry = {
+                "transport": "ssh",
+                "host": args.host,
+                "user": args.user,
+                "shell": args.shell or ("powershell" if (args.platform or "").lower() == "windows" else "bash"),
+                "platform": args.platform,
+                "python_bin": args.python_bin,
+                "launch": {"mode": args.launch_mode},
+            }
+            if args.port:
+                entry["port"] = args.port
+            if args.launch_command:
+                entry["launch"]["command"] = args.launch_command
+            targets[args.name] = {k: v for k, v in entry.items() if v not in (None, {})}
+            path = save_targets(data, args.targets_file)
+            payload = {"ok": True, "saved": str(path), "target": resolve_target(args.name, str(path))}
+            _print_output(payload, args.json)
+            return 0
+        if args.target_command == "doctor":
+            cfg = resolve_target(args.name, args.targets_file)
+            payload = {
+                "ok": True,
+                "target": cfg,
+                "checks": {
+                    "transport": cfg.get("transport"),
+                    "resolved_target": cfg.get("target"),
+                    "remote_command": infer_remote_command(cfg),
+                },
+            }
+            _print_output(payload, args.json)
+            return 0
+        parser.error("unknown target subcommand")
 
     if args.command == "selftest":
         conn = connect_local_stdio(_project_root())

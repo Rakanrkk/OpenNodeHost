@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from opennodehost.targets import infer_remote_command, resolve_target
+
 
 
 @dataclass
@@ -80,9 +82,18 @@ def connect_ssh_stdio(target: str, remote_command: str = "opennodehost-node --st
         "ServerAliveInterval=30",
         "-o",
         "ServerAliveCountMax=3",
-        target,
-        remote_command,
     ]
+    cfg = resolve_target(target)
+    if cfg.get("identity_file"):
+        cmd.extend(["-i", str(Path(cfg["identity_file"]).expanduser())])
+    if cfg.get("port"):
+        cmd.extend(["-p", str(cfg["port"])])
+    if cfg.get("ssh_options"):
+        for option in cfg["ssh_options"]:
+            cmd.extend(["-o", str(option)])
+    actual_target = cfg.get("target", target)
+    actual_remote_command = remote_command or infer_remote_command(cfg)
+    cmd.extend([actual_target, actual_remote_command])
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
@@ -97,8 +108,10 @@ def make_persistent_local(project_root: Path) -> PersistentController:
     return PersistentController(connect_local_stdio(project_root))
 
 
-def make_persistent_ssh(target: str, remote_command: str = "opennodehost-node --stdio") -> PersistentController:
-    return PersistentController(connect_ssh_stdio(target, remote_command))
+def make_persistent_ssh(target: str, remote_command: str | None = None) -> PersistentController:
+    cfg = resolve_target(target)
+    command = remote_command or infer_remote_command(cfg)
+    return PersistentController(connect_ssh_stdio(target, command))
 
 
 def response_result(messages: list[dict[str, Any]], request_id: str | None = None) -> dict[str, Any]:

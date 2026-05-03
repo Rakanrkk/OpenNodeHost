@@ -17,7 +17,7 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent"
 ]
-dependencies = []
+dependencies = ["PyYAML>=6.0"]
 
 [project.scripts]
 opennodehost = "opennodehost.controller_cli:main"

@@ -103,6 +103,19 @@ cd ~/WorkSpace/OpenNodeHost
 pip install -e .
 ```
 
+### Initialize a named target
+
+```bash
+opennodehost --json target init win-dev \
+  --host 192.168.2.206 \
+  --user Administrator \
+  --platform windows \
+  --shell powershell \
+  --python-bin python \
+  --launch-mode custom \
+  --launch-command "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\OpenNodeHost\\.venv\\Scripts\\python.exe' -m opennodehost.node_host_cli --stdio\""
+```
+
 ## CLI Usage
 
 ### Open a local session
@@ -171,10 +184,21 @@ ssh -T <target> opennodehost-node --stdio
 
 Controller-side SSH commands accept `--target user@host` and optional `--remote-command`.
 
+You can also define named targets in `~/.config/opennodehost/targets.yaml` and use them via `--target <name>`.
+
 Example:
 
 ```bash
-PYTHONPATH=src python src/opennodehost/controller_cli.py --json --remote-command "python -m opennodehost.node_host_cli --stdio" session open --target user@host
+opennodehost --json target show win-dev
+opennodehost --json target doctor win-dev
+```
+
+When a target config exists, controller-side SSH launch can infer the remote command automatically from target metadata unless you explicitly override it.
+
+Example:
+
+```bash
+PYTHONPATH=src python src/opennodehost/controller_cli.py --json workflow run "Write-Output 'hello-from-windows'" --target win-dev --shell powershell
 ```
 
 See `docs/transport-ssh.md` for more details and caveats.

@@ -1,10 +1,21 @@
 # Remote target examples
 
-# Example idea:
-# targets:
-#   dev-linux:
-#     transport: ssh
-#     host: 10.0.0.10
-#     user: ubuntu
-#     shell: bash
-#     identity_file: ~/.ssh/id_ed25519
+targets:
+  dev-linux:
+    transport: ssh
+    host: 10.0.0.10
+    user: ubuntu
+    shell: bash
+    identity_file: ~/.ssh/id_ed25519
+    launch:
+      mode: auto
+
+  win-dev:
+    transport: ssh
+    host: 192.168.2.206
+    user: Administrator
+    shell: powershell
+    platform: windows
+    launch:
+      mode: custom
+      command: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "& 'C:\\OpenNodeHost\\.venv\\Scripts\\python.exe' -m opennodehost.node_host_cli --stdio"
